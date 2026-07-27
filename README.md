@@ -1,37 +1,87 @@
-# 🚨 온라인 정신건강 위기 '약신호(Weak Signal)' 탐지 파이프라인
-*(Detecting Weak Signals of Mental Health Crises via Modular 6-Stage NLP & CCF Pipeline)*
+# 이원적 온라인 담론의 미래신호 탐지 파이프라인
 
-<p align="left">
-  <img src="https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=Python&logoColor=white"/>
-  <img src="https://img.shields.io/badge/Jupyter-F37626?style=flat-square&logo=Jupyter&logoColor=white"/>
-  <img src="https://img.shields.io/badge/NLP-Natural_Language_Processing-success?style=flat-square"/>
-  <img src="https://img.shields.io/badge/Data_Analysis-Public_Safety-blue?style=flat-square"/>
-</p>
+네이버 뉴스 기사와 댓글을 이원적으로 수집해 사회적 긴장 담론의 약신호(Weak Signal)를 탐지하고,
+대중 여론이 공식 보도에 선행하는지를 통계적으로 검증하는 6단계 분석 파이프라인이다.
 
-## 📌 Project Overview (프로젝트 개요)
-본 프로젝트는 사후 개입 위주의 기존 치안 및 공공보건 시스템을 선제적 예방 모델로 전환하기 위해 기획된 **데이터 분석 파이프라인 모델**입니다. 
+## 6단계 구성
 
-온라인 담론 내에 내재된 이상동기 범죄(Abnormal Motive Crimes) 및 정신건강 위기의 '약신호(Weak Signal)'를 조기에 탐지하고, 대중 여론(댓글)이 공식 담론(뉴스 기사)에 선행한다는 사회학적 가설(H1)을 시차교차상관(CCF) 통계 분석으로 검증하는 것을 목표로 합니다. 궁극적으로는 경찰관 및 실무자를 위한 데이터 기반 의사결정 지원 시스템(예: '모두의 경찰관' 등 치안 행정 LLM의 후속 R&D)의 기반 기술로 활용됩니다.
+| 단계 | 파일 | 핵심 내용 |
+|---|---|---|
+| 1 | `01_data_collection.py` | 이원적 키워드(사건 프레임 / 사회적 긴장) x 이원적 담론(기사 / 댓글) 수집 |
+| 2 | `02_nlp_preprocessing.py` | Kiwi 형태소 분석, 코퍼스별 불용어, 전재 중복 제거 |
+| 3 | `03_topic_modeling.py` | LDA, Perplexity·Log-Likelihood·UMass Coherence 병용, 월별 토픽 트렌드 |
+| 4 | `04_kem_kim_filtering.py` | 중앙값 기준 KEM/KIM 사분면, 미래신호 비일관성 필터링 |
+| 5 | `05_sna_hub_identification.py` | 약신호 동시출현 네트워크, 중심성, 허브 월별 트렌드 |
+| 6 | `06_ccf_validation.py` | 정상화·사전백색화 후 시차교차상관, 그레인저 검정, H1 검증 |
 
-## ⚙️ 6-Stage Pipeline Architecture (6단계 분석 프로세스)
+`common.py`는 여섯 단계가 공유하는 경로, 로깅, 한글 폰트, 토큰 입출력을 담는다.
 
-| 단계 | 프로세스명 (파일명) | 핵심 내용 |
-| :---: | :--- | :--- |
-| **01** | `Dual Data Collection` | 3대 전조증상 키워드 기반 네이버 뉴스 기사 및 댓글 텍스트 듀얼 크롤링 |
-| **02** | `Clinical Preprocessing` | 정규식 및 형태소 분석(Kiwi)을 통한 비정형 텍스트 정제 및 토큰화 |
-| **03** | `LDA Topic Modeling` | 잠재 Dirichlet 할당법을 활용한 시계열 구간별 위기 담론 토픽 비중 변화 분석 |
-| **04** | `KEM/KIM Filtering` | 시간가중치($tw=0.05$) 및 중앙값 기준 사분면 맵핑, 시계 방향 진화 패턴을 통한 비일관적 노이즈(단발성 이슈) 필터링 |
-| **05** | `SNA & Hub Extraction` | 진성 약신호 대상 의미연결망(SNA) 중심성(연결정도·매개) 연산 및 핵심 뇌관(Hub) 월별 트렌드 추출 |
-| **06** | `CCF Statistical Validation` | 동일 키워드의 대중 여론(댓글)-공식 담론(기사) DoV 시계열 간 **시차교차상관(Lagged CCF) 분석을 통한 선행성(H1) 통계 검증** |
+## 실행
 
-## 📂 Repository Structure (폴더 구조)
-본 레포지토리는 모듈화된 독립 실행형 파이프라인의 데이터 흐름에 따라 순차적으로 구성되어 있습니다.
+```bash
+pip install -r requirements.txt
+python 01_data_collection.py
+python 02_nlp_preprocessing.py
+python 03_topic_modeling.py    # K 탐색표 확인 후 FINAL_K 수정하고 재실행
+python 04_kem_kim_filtering.py
+python 05_sna_hub_identification.py
+python 06_ccf_validation.py
+```
 
-```text
-├── 01_Data_Collection/              # 뉴스 기사 및 댓글 수집 스크립트
-├── 02_Clinical_Preprocessing/       # 텍스트 정제 및 토큰화 (`_preprocessed.csv`)
-├── 03_LDA_Topic_Modeling/           # 토픽 모델링 및 트렌드 추출
-├── 04_KEM_KIM_Filtering/            # KEM/KIM 지표 산출 및 비일관성 필터링 (`_kem_kim_matrix.csv`)
-├── 05_SNA_and_Hub_Extraction/       # SNA 중심성 분석 및 월별 뇌관 트렌드 도출 (`_hub_monthly_trends.csv`)
-├── 06_CCF_Statistical_Validation/   # 시차교차상관(CCF) 분석 및 가설(H1) 검증 모듈
-└── README.md
+산출물은 `data/raw`, `data/interim`, `data/output`, `figures`에 나뉘어 저장된다.
+
+## 이전 버전에서 수정한 사항
+
+### 1. KEM/KIM 사분면이 약신호를 탐지할 수 없던 구조 (4단계)
+
+이전 코드는 `TF >= median(TF)`와 `DoV >= median(DoV)`를 두 축으로 썼다.
+그러나 같은 구간에서 `DoV = (TF / 문서수) x 시간가중치`이고 뒤의 두 값은 구간 상수이므로
+두 조건은 항상 동시에 참이거나 동시에 거짓이다. 그 결과 2사분면(약신호)과 4사분면이
+수학적으로 발생할 수 없었고, 약신호는 단 하나도 검출되지 않는 상태였다.
+
+Yoon(2012)의 정의대로 x축을 평균 빈도, y축을 증가율로 되돌렸다.
+아울러 단일어와 2-gram의 중앙값을 층화해 잡는다. 2-gram은 정의상 단일어보다 드물어
+하나의 기준선으로 비교하면 약신호 목록을 2-gram이 독점하기 때문이다.
+
+### 2. 시차교차상관의 방향 오독 (6단계)
+
+`statsmodels.tsa.stattools.ccf(x, y)`의 k번째 원소는 `corr(x[t+k], y[t])`다.
+이전 코드는 `ccf(댓글, 뉴스)`를 호출하고 k > 0에서 봉우리가 나오면 댓글이 선행한다고
+판정했으나, 이는 나중 시점의 댓글이 앞 시점의 뉴스와 닮았다는 뜻이므로 실제로는
+뉴스가 댓글을 선행한다는 반대 방향의 증거다. 가설을 지지하는 것처럼 보이는 결과일수록
+사실은 가설을 기각하는 증거였다.
+
+상관을 직접 계산하는 `correlation_at_lag`로 대체하고 부호 규약을 코드와 그래프 축에 명시했다.
+
+### 3. 5단계와 6단계 사이의 파이프라인 단절
+
+이전 5단계는 중심성 표를 `hub_monthly_trends.csv`라는 이름으로 저장했으나 월별 데이터가
+아니었고, 6단계가 읽으려는 `news_hub_monthly_trends.csv`는 어디서도 생성되지 않았다.
+5단계가 허브의 월별 가시성 시계열을 실제로 산출하도록 바꿨다.
+
+### 4. 그 밖의 수정
+
+- 구간 분할을 문서 수 기준(`pd.qcut`)에서 달력 기준으로 변경. 시간가중치는 등간격 전제 위에서만 의미가 있다.
+- 매개중심성 계산 시 동시출현 횟수를 거리로 변환. networkx는 `weight`를 거리로 해석하므로 그대로 넣으면 결과가 뒤집힌다.
+- 동시출현을 문서 단위로 집계. 이전의 `X.T @ X`는 등장 횟수를 곱해 한 문서 안의 반복을 동시출현으로 과대 계산했다.
+- 허브 점수 합산 전 두 중심성 지표를 정규화.
+- 동사·형용사 토큰에 어미를 붙여 사전형 복원. Kiwi의 `form`은 어간만 돌려주므로 이전에는 '이상하', '죽이' 같은 비단어가 키워드로 올라왔다.
+- 언론사 전재 기사 제거. 같은 원고가 여러 매체에 실리면 문서빈도가 부풀어 확산성이 왜곡된다.
+- ADF 단위근 검정, 차분, 사전백색화, 그레인저 인과성 검정, Benjamini-Hochberg 다중비교 보정 추가.
+- 임의 문턱값 `r >= 0.3`을 표본 크기 기반 신뢰한계로 대체.
+- 토큰 저장을 `repr` + `ast.literal_eval`에서 JSON으로 변경.
+- 한글 폰트 설정을 전 단계에서 크로스플랫폼으로 통일.
+- 반복문 안의 `pd.concat` 제거, 수집 체크포인트 및 재개 기능 추가.
+
+## H1의 원기사 배제
+
+댓글은 반드시 원기사보다 나중에 작성된다. 따라서 댓글 t월과 기사 t+k월(k >= 1)을 비교하면
+비교 대상 기사는 그 댓글의 원기사일 수 없다. 즉 양의 시차만 보는 것 자체가 원기사 배제
+조건을 구조적으로 충족한다. 더 엄격한 확인이 필요하면 `Config.strict_parent_exclusion`을
+켜서 댓글이 달린 기사를 아예 제외하고 재검증한다.
+
+## 연구윤리
+
+수집 대상은 공개 게시물이나, 서비스 이용약관과 개인정보 보호법 검토 및 IRB 심의를 마친 뒤
+실행해야 한다. 작성자 아이디, 닉네임, 프로필은 수집 단계에서 아예 가져오지 않으며 결과는
+집계 수준으로만 보고한다. 본 파이프라인은 개인 단위 위험도를 산출하지 않는다.
