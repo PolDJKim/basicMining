@@ -1,113 +1,97 @@
+# Stage 4] KEM/KIM 시계열 지표 산출 및 비일관성 필터링 모듈
 import pandas as pd
 import numpy as np
-import ast
+import ast #글자(문자열)로 저장된 파이썬 코드를 실제 파이썬 코드로 안전하게 바꿔주는 도구
 from sklearn.feature_extraction.text import CountVectorizer
 import warnings
 warnings.filterwarnings('ignore')
 
-# =========================================================
-# Stage 4: KEM/KIM 시계열 지표 산출 및 비일관성 필터링 모듈
-# =========================================================
-
 def track_and_filter_signals(input_filename, matrix_filename, report_filename, data_type, num_periods=4, time_weight=0.05):
-    print(f"\n{'='*70}")
-    print(f"[*] [{data_type}] KEM/KIM 지표 산출 및 비일관성 필터링 시작!")
-    print(f"{'='*70}")
-    
-    # ---------------------------------------------------------
-    # 1. 전처리된 데이터 불러오기 및 텍스트/시계열 복원
-    # ---------------------------------------------------------
-    try:
+    #matrix_filename (전체 궤적 매트릭스 파일) : 단어 사전(vocab)에 등록된 모든 단어들의 4분위 성적표(궤적)가 전부 기록된 거대한 종합 데이터베이스.
+    #report_filename (최종 진성 약신호 리포트 파일) : 비일관성 필터링을 모두 통과한 진짜 핵심 단어(True Weak Signals)들만 걸러낸 엑셀 파일
+    #num_periods=4: 전체 수집 기간을 4개의 구간(예: 1,2,3,4분기)으로 쪼개서 분석, 최근 데이터에 시간가중치 tw 0.05
+    print(f"[{data_type}] KEM/KIM 지표 산출 및 비일관성 필터링 시작!")
+
+    try: # 전처리된 데이터 불러오기 및 텍스트/시계열 복원
         df_clean = pd.read_csv(input_filename)
-        # 날짜 타입 복구
-        df_clean['date'] = pd.to_datetime(df_clean['date']) 
+        df_clean['date'] = pd.to_datetime(df_clean['date']) # 날짜 타입 복구
         
         # Stage 2에서 저장된 'tokens' 문자열 리스트를 실제 파이썬 리스트로 변환 후 결합
         df_clean['tokens'] = df_clean['tokens'].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
         df_clean['final_text'] = df_clean['tokens'].apply(lambda x: ' '.join(x))
         
     except FileNotFoundError:
-        print(f"[-] '{input_filename}' 파일이 없습니다. Stage 2를 먼저 실행해 주세요.")
+        print(f"'{input_filename}' 파일이 없습니다.")
         return
 
-    # 논문 방법론에 따라 전체 기간을 지정된 개수(기본 4분위)로 균등 분할
-    df_clean['period'] = pd.qcut(df_clean['date'], q=num_periods, labels=[f'P{i+1}' for i in range(num_periods)])
-    print(f"  - 데이터를 총 {num_periods}개의 시계열 구간(P1~P{num_periods})으로 분할했습니다.")
+    df_clean['period'] = pd.qcut(df_clean['date'], q=num_periods, labels=[f'P{i+1}' for i in range(num_periods)]) # 전체 기간을 4개 구간으로 분할
+    print(f" 데이터를 총 {num_periods}개의 시계열 구간(P1~P{num_periods})으로 분할했습니다.")
     
-    # ---------------------------------------------------------
     # 2. 통합 단어 사전(Vocabulary) 구축
-    # ---------------------------------------------------------
     MIN_DF_VAL = 3 # 극단적 노이즈 제거: 최소 3개 이상의 문서에서 등장한 단어만 취급
-    corpus_all = df_clean['final_text'].fillna("").tolist()
+    corpus_all = df_clean['final_text'].fillna("").tolist() #전체 텍스트 데이터 리스트로 변환해서 긁어모으기
 
-    # N-gram(1,2) 적용: 단일 단어 및 두 단어 조합(예: "묻지마 범죄") 모두 추출
-    base_vectorizer = CountVectorizer(min_df=MIN_DF_VAL, ngram_range=(1,2)) 
-    base_vectorizer.fit(corpus_all) 
-    vocab = base_vectorizer.get_feature_names_out() 
+    base_vectorizer = CountVectorizer(min_df=MIN_DF_VAL, ngram_range=(1,2))# N-gram(1,2) 적용: 단일 단어 및 두 단어 조합(예: "묻지마 범죄") 모두 추출
+    base_vectorizer.fit(corpus_all)  #준비된 기계(base_vectorizer)에 전체 텍스트 꾸러미(corpus_all)를 밀어 넣고 학습(Fit), 단어사전만 만듬
+    vocab = base_vectorizer.get_feature_names_out() #'최종 합격 단어들의 목록'을 바깥으로 뽑아내어 vocab 변수에 저장
 
-    # 구간별(P1~Pn) 텍스트 묶음(corpus) 및 문서 개수 추출
+    # 구간별(P1~P4) 텍스트 묶음(corpus) 및 문서 개수 추출 (딕셔너리 형태로 저장) {'P1' : ['1구간 1기사', '1구간 2기사', ...], 'P2' : ...}
     period_corpora = {p: df_clean[df_clean['period'] == p]['final_text'].fillna("").tolist() for p in [f'P{i+1}' for i in range(num_periods)]}
-    period_doc_counts = {p: len(period_corpora[p]) if len(period_corpora[p]) > 0 else 1 for p in [f'P{i+1}' for i in range(num_periods)]}
+    period_doc_counts = {p: len(period_corpora[p]) if len(period_corpora[p]) > 0 else 1 for p in [f'P{i+1}' for i in range(num_periods)]} #{'P1': 300, 'P2': 300, 'P3': 300, 'P4': 300}
 
-    # 단어별 궤적 추적 바구니 생성
-    trajectory_data_kem = {word: [] for word in vocab} 
-    trajectory_data_kim = {word: [] for word in vocab} 
-
-    # ---------------------------------------------------------
-    # 3. 구간별 가중치 적용 지표(DoV, DoD) 산출 및 사분면 판별
-    # ---------------------------------------------------------
-    for idx, p in enumerate([f'P{i+1}' for i in range(num_periods)]):
-        corpus_p = period_corpora[p]
-        nn_j = period_doc_counts[p]
-        n_total = num_periods
-        j_step = idx + 1 # 현재 진행 중인 구간 (1~4)
+    #KEM 모델과 KIM 모델은 단어를 평가하는 '기준'이 완전히 다르기 때문에, 성적을 기록할 장부도 두 권이 필요
+    trajectory_data_kem = {word: [] for word in vocab} # 이 단어가 얼마나 '많이(가시성, TF/DoV)' 언급되었는지를 기준으로 평가받은 사분면 방 번호(1~4)를 기록할 장부
+    trajectory_data_kim = {word: [] for word in vocab} #이 단어가 얼마나 '다양한 사람들에게(확산성, DF/DoD)' 퍼져나갔는지를 기준으로 평가받은 사분면 방 번호(1~4)를 기록할 장부
+    #{'이상동기': [3, 3, 2, 2]}
+    #참고사항 : 최종적으로 종착지는 kem, kim 모두 2번이어야 하고 역주행(1->2)하지 않아야 한다
+    for idx, p in enumerate([f'P{i+1}' for i in range(num_periods)]):  #구간별 가중치 적용 지표(DoV, DoD) 산출 및 사분면 판별
+        corpus_p = period_corpora[p] #만약 첫 번째 바퀴(p = 'P1')라면, 앞서 만들어둔 거대한 바구니(period_corpora)에서 P1 구간에 해당하는 기사와 댓글 텍스트들만 쏙 빼와서 corpus_p라는 변수에 잠시 담아둠
+        nn_j = period_doc_counts[p] #P*구간의 텍스트가 총 몇 개인지, 미리 세어두었던 숫자(예: 300개)를 가져와 nn_j에 넣음
+        n_total = num_periods #4
+        j_step = idx + 1 # 현재 진행 중인 구간 1~4
         
-        # 시간가중치 공식: [1 - tw * (n - j)]
-        tw_multiplier = 1 - time_weight * (n_total - j_step) 
+        # 시간가중치 공식: [1 - tw * (n - j)] -> P1:.85 P2:.9 P3:.95 P4: 페널티없음
+        tw_multiplier = 1 - time_weight * (n_total - j_step)  #time_weight = 0.05, n_total = 4, j_step = P1~P4
         
-        # TF 산출 (총 등장 횟수 기반 가시성 재료)
-        tf_vec = CountVectorizer(vocabulary=vocab, ngram_range=(1,2))
-        tf_raw = np.array(tf_vec.fit_transform(corpus_p).sum(axis=0)).flatten()
-        dov_p = (tf_raw / nn_j) * tw_multiplier
+        tf_vec = CountVectorizer(vocabulary=vocab, ngram_range=(1,2)) # TF 단어빈도산출 (총 등장 횟수 기반 가시성 재료)
+        tf_raw = np.array(tf_vec.fit_transform(corpus_p).sum(axis=0)).flatten() #행렬 생성
+        dov_p = (tf_raw / nn_j) * tw_multiplier #dov KEM 가시성 점수
         
-        # DF 산출 (문서 등장 횟수 기반 확산성 재료, binary=True)
-        df_vec = CountVectorizer(vocabulary=vocab, ngram_range=(1,2), binary=True) 
+        df_vec = CountVectorizer(vocabulary=vocab, ngram_range=(1,2), binary=True) # DF 문서빈도 산출 (문서 등장 횟수 기반 확산성 재료, binary=True)
         df_raw = np.array(df_vec.fit_transform(corpus_p).sum(axis=0)).flatten()
-        dod_p = (df_raw / nn_j) * tw_multiplier
+        dod_p = (df_raw / nn_j) * tw_multiplier #dod KIM 확산성 점수
         
         # 해당 구간 사분면 분할 기준선: 중앙값(Median)
-        median_tf = np.median(tf_raw)
-        median_dov = np.median(dov_p)
-        median_df = np.median(df_raw)
-        median_dod = np.median(dod_p)
+        median_tf = np.median(tf_raw) #단어빈도 중앙값
+        median_dov = np.median(dov_p) #가시성 중앙값
+        median_df = np.median(df_raw) #문서빈도 중앙값
+        median_dod = np.median(dod_p) #확산성 중앙값
         
         for i, word in enumerate(vocab):
-            tf_val = tf_raw[i]
+            tf_val = tf_raw[i] #tf_val은 배열이나 리스트 형태가 아니라, 그 단어가 해당 구간에서 몇 번 쓰였는지를 나타내는 '단일 숫자(정수)' 값 하나를 정확하게 가리킴
             dov_val = dov_p[i]
             df_val = df_raw[i]
             dod_val = dod_p[i]
             
             # [KEM 사분면 판별]
-            if tf_val >= median_tf and dov_val >= median_dov: q_kem = 1   # 강신호
-            elif tf_val < median_tf and dov_val >= median_dov: q_kem = 2  # 약신호
-            elif tf_val < median_tf and dov_val < median_dov: q_kem = 3   # 잠재신호
-            else: q_kem = 4                                               # 잘 알려진 신호
+            if   tf_val >= median_tf and dov_val >= median_dov: q_kem = 1  # 강신호 절대적인 언급량(TF)도 중앙값 이상, 가중치 점수(DoV)도 중앙값 이상
+            elif tf_val < median_tf  and dov_val >= median_dov: q_kem = 2 # 약신호 절대적인 언급량(TF)은 중앙값 미만, but DoV 점수는 중앙값 이상
+            elif tf_val < median_tf  and dov_val <  median_dov: q_kem = 3  # 잠재신호
+            else: q_kem = 4                                              # 잘 알려진 신호
             
             # [KIM 사분면 판별]
-            if df_val >= median_df and dod_val >= median_dod: q_kim = 1
-            elif df_val < median_df and dod_val >= median_dod: q_kim = 2
-            elif df_val < median_df and dod_val < median_dod: q_kim = 3
-            else: q_kim = 4
+            if df_val >= median_df and dod_val >= median_dod: q_kim = 1 #강신호
+            elif df_val < median_df and dod_val >= median_dod: q_kim = 2 #약신호
+            elif df_val < median_df and dod_val < median_dod: q_kim = 3 #잠재신호
+            else: q_kim = 4 #잘 알려진 신호
             
-            trajectory_data_kem[word].append(q_kem) 
-            trajectory_data_kim[word].append(q_kim)
+            trajectory_data_kem[word].append(q_kem)  #trajectory_data_kem['이상동기'] = [3, 3, 2, 2]
+            trajectory_data_kim[word].append(q_kim)  #trajectory_data_kim['이상동기'] = [3, 3, 2, 2]
 
-    # ---------------------------------------------------------
     # 4. 미래신호 비일관성 필터링 (시계 방향 진화 패턴 검증)
-    # ---------------------------------------------------------
     print(f"  - [{data_type}] 미래신호 비일관성 필터링 수행 중...")
 
-    def check_clockwise_evolution(history): 
+    def check_clockwise_evolution(history):  #history에는 history_kim : trajectory_data_kem[word] 들어감
         # 논리: 잠재(3) -> 약신호(2) -> 강신호(1) 순서의 오름차순 진화 검증
         final_pos = history[-1]
         if final_pos not in [1, 2]: # 마지막 시점엔 최소 약신호(2) 이상이어야 함
@@ -134,8 +118,7 @@ def track_and_filter_signals(input_filename, matrix_filename, report_filename, d
         history_kem = trajectory_data_kem[word]
         history_kim = trajectory_data_kim[word]
         
-        # KEM 기준 진성 신호 여부
-        is_valid_signal = check_clockwise_evolution(history_kem) 
+        is_valid_signal = check_clockwise_evolution(history_kem)  # KEM 기준 진성 신호 여부
         
         final_records.append({
             'Keyword': word,
@@ -155,16 +138,12 @@ def track_and_filter_signals(input_filename, matrix_filename, report_filename, d
     # 진성 약신호 추출: 1) 일관성 검증 통과 2) KEM과 KIM 모두 최종 시점에 '약신호(2)'
     final_weak_signals = signal_df[
         (signal_df['Is_Valid_Evolution'] == True) & 
-        (signal_df['Latest_KEM_Quadrant'] == 2) &
-        (signal_df['Latest_KIM_Quadrant'] == 2)
+        (signal_df['Latest_KEM_Quadrant'] == 2) &  #1로 바꾸면 강신호 파악 가능(논문 라이팅용)
+        (signal_df['Latest_KIM_Quadrant'] == 2)    #1로 바꾸면 강신호 파악 가능(논문 라이팅용)
     ].sort_values(by='TF_Latest', ascending=False).reset_index(drop=True)
 
-    # ---------------------------------------------------------
     # 5. 결과 리포팅 및 저장
-    # ---------------------------------------------------------
-    print('\n' + '-'*70)
     print(f" 🚨 [{data_type}] 필터링 통과 진성 약신호 (True Weak Signals)")
-    print('-'*70)
     if not final_weak_signals.empty:
         print(final_weak_signals[['Keyword', 'Trajectory_KEM', 'Trajectory_KIM', 'TF_Latest', 'DF_Latest']].head(10).to_string(index=False))
         final_weak_signals.to_csv(report_filename, index=False, encoding='utf-8-sig')
@@ -173,12 +152,9 @@ def track_and_filter_signals(input_filename, matrix_filename, report_filename, d
         print("  [-] 조건에 부합하는 진성 약신호가 없습니다.")
     print('-'*70)
 
-# =========================================================
 # 실행부 (Stage 2 출력물 활용)
-# =========================================================
 if __name__ == "__main__":
-    # 1) 뉴스 기사 (공식 담론) 처리
-    track_and_filter_signals(
+    track_and_filter_signals( # 1) 뉴스 기사 (공식 담론) 처리
         input_filename="news_preprocessed.csv",
         matrix_filename="news_kem_kim_matrix.csv",
         report_filename="news_weak_signals_report.csv",
@@ -186,9 +162,7 @@ if __name__ == "__main__":
         num_periods=4,
         time_weight=0.05
     )
-
-    # 2) 뉴스 댓글 (대중 여론) 처리
-    track_and_filter_signals(
+    track_and_filter_signals( # 2) 뉴스 댓글 (대중 여론) 처리
         input_filename="comments_preprocessed.csv",
         matrix_filename="comments_kem_kim_matrix.csv",
         report_filename="comments_weak_signals_report.csv",
