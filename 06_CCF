@@ -1,6 +1,4 @@
-# ==========================================
-# Stage 6: 연구 가설 검증 (H1) - 시차교차상관(CCF) 분석 모듈
-# ==========================================
+# Stage 6] 연구 가설 검증 (H1) - 시차교차상관(CCF) 분석 모듈 (번개와 천둥)
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,14 +6,12 @@ from statsmodels.tsa.stattools import ccf
 import warnings
 warnings.filterwarnings('ignore')
 
-# 그래프 폰트 및 시각화 환경 세팅 (한글 깨짐 방지)
-plt.rcParams['font.family'] = 'Malgun Gothic'  # 💡 맥(Mac) 유저는 'AppleGothic'으로 변경
-plt.rcParams['axes.unicode_minus'] = False 
+#Runtime Configuration Parameters 도구 상자 설정
+plt.rcParams['font.family'] = 'Malgun Gothic'#matplotlib pyplot 그래프 폰트 및 시각화 환경 세팅 (한글 깨짐 방지) 맥(AppleGothic)
+plt.rcParams['axes.unicode_minus'] = False  #특수문자 마이너스(Unicode) 쓰지 마(False)! 그냥 키보드에 있는 짧은 짝대기(-) 기호로 그려 (한글폰트에서 안깨지게)
 
-print("\n[Stage 6] 대중 여론 선행성 검증(H1)을 위한 시차교차상관(CCF) 분석을 시작합니다.")
-
-# 1. 5단계에서 생성된 허브 월별 트렌드 데이터 로드
-try:
+print("[Stage 6] 대중 여론 선행성 검증(H1)을 위한 시차교차상관(CCF) 분석을 시작합니다.")
+try: # 5단계에서 생성된 허브 월별 트렌드 데이터 로드
     comments_trend = pd.read_csv("comments_hub_monthly_trends.csv")
     news_trend = pd.read_csv("news_hub_monthly_trends.csv")
     print("  - 허브 월별 트렌드 데이터를 성공적으로 불러왔습니다.")
@@ -24,33 +20,31 @@ except FileNotFoundError:
     print("    Stage 5를 먼저 실행하여 트렌드 파일을 생성해 주세요.")
     exit()
 
-# 2. 날짜(Month) 기준으로 데이터 통합 (공통 타임라인 구축)
+# 날짜(Month) 기준으로 데이터 통합 (공통 타임라인 구축)
 merged_df = pd.merge(comments_trend, news_trend, on='date', how='inner').sort_values('date').reset_index(drop=True)
+                                                #date기준합치기  #교집합
 
 if merged_df.empty:
     print("  - [오류] 댓글과 뉴스 간에 시기가 겹치는 공통 월별 데이터가 없습니다.")
     exit()
 
-# 3. 양측 데이터에 공통으로 존재하는 허브 키워드 추출
 comment_cols = [c.replace('_score', '') for c in comments_trend.columns if c != 'date']
 news_cols = [c.replace('_score', '') for c in news_trend.columns if c != 'date']
-common_hubs = list(set(comment_cols) & set(news_cols))
-
+common_hubs = list(set(comment_cols) & set(news_cols)) # 양측 데이터에 공통으로 존재하는 허브 키워드 추출 
+#작업 전: ['date', '칼부림_score', '신림역_score', '호신용품_score'] -> 작업 후 (comment_cols): ['칼부림', '신림역', '호신용품']
 print(f"  - 교차 검증 대상 공통 뇌관(Hub) 키워드: {common_hubs}")
 
-validation_results = []
-
-# 4. 공통 허브별 시차교차상관(CCF) 분석 수행
-for hub in common_hubs:
-    score_col = f"{hub}_score"
+validation_results = [] #담을 바구니 생성
+for hub in common_hubs: # 공통 허브별 시차교차상관(CCF) 분석 수행
+    score_col = f"{hub}_score" #데이터프레임(표) 안에 있는 실제 기둥(열) 이름은 여전히 칼부림_score이므로 떼어냈던 꼬리표를 다시 붙여줌
     
     # 각각의 시계열 스코어 추출
     cmt_series = merged_df[f"{score_col}_x" if f"{score_col}_x" in merged_df.columns else score_col].values.astype(float)
     # 컬럼명이 merge 과정에서 충돌날 경우 대비한 예외 안전장치
-    try:
-        cmt_series = merged_df[f"{score_col}_x"].values.astype(float)
-        news_series = merged_df[f"{score_col}_y"].values.astype(float)
-    except KeyError:
+    try: # 댓글 데이터는 _x 에서, 뉴스 데이터는 _y 에서 순수 숫자만 추출
+        cmt_series = merged_df[f"{score_col}_x"].values.astype(float)  #댓글
+        news_series = merged_df[f"{score_col}_y"].values.astype(float) #뉴스
+    except KeyError: # 만약 어떤 이유로 _x, _y가 안 붙고 병합되었다면, 원본 표에서 직접 가져오기 (가장 안전한 방법)
         cmt_series = merged_df[score_col].values.astype(float)
         news_series = merged_df[score_col].values.astype(float)
 
@@ -59,25 +53,22 @@ for hub in common_hubs:
         continue
         
     # 데이터 정규화 (Standardization)를 통한 CCF 안정성 확보
-    cmt_norm = (cmt_series - np.mean(cmt_series)) / (np.std(cmt_series) + 1e-9)
+    cmt_norm = (cmt_series - np.mean(cmt_series)) / (np.std(cmt_series) + 1e-9) #1e-9는 0.000000001이라는 먼지보다 작은 숫자, 0출력 방지를 위한 에어백
     news_norm = (news_series - np.mean(news_series)) / (np.std(news_series) + 1e-9)
     
-    # 시차교차상관(Lagged Cross-Correlation) 계산
-    # statsmodels의 ccf 함수 활용 (댓글 시계열이 뉴스 시계열에 미치는 영향 분석)
-    correlations = ccf(cmt_norm, news_norm, adjusted=False)
-    
+    correlations = ccf(cmt_norm, news_norm, adjusted=False)  # 시차교차상관계산: statsmodels의 ccf 함수 활용 (댓글 시계열이 뉴스 시계열에 미치는 영향 분석)
+                  #ccf(선행변수, 후행변수, 엄격히 채점) ->[0.2, 0.8, 0.3, -0.1, ...] 시차0일때 0.2 시차1일때 0.8
     # 유효한 시차(Lag) 범위 설정 (전체 데이터 길이의 절반 또는 최대 6개월)
-    max_lag_range = min(len(correlations) // 2, 6)
+    max_lag_range = min(len(correlations) // 2, 6)  #//2는 정수로 떨어지는 몫만 구하기 (나머지 내림으로 버림)
     if max_lag_range < 1: max_lag_range = 1
     
     lag_subset = correlations[:max_lag_range]
     
     best_lag = np.argmax(lag_subset)
     max_corr = lag_subset[best_lag]
-    
-    # H1 가설 검증 조건: 
-    # 1) 최적 시차(Lag)가 양(+)의 값인가? (k > 0 이면 댓글 여론이 뉴스를 선행함)
-    # 2) 최대 상관계수가 유의미한 수준(r > 0.3 이상)인가?
+    #H1 가설 검증 조건: 
+    #1) 최적 시차(Lag)가 양(+)의 값인가? (k > 0 이면 댓글 여론이 뉴스를 선행함)
+    #2) 최대 상관계수가 유의미한 수준(r > 0.3 이상)인가?
     is_preceding = best_lag > 0 and max_corr >= 0.3
     
     validation_results.append({
@@ -92,7 +83,7 @@ for hub in common_hubs:
     print(f"     - 최대 상관계수 (r): {max_corr:.3f}")
     print(f"     - H1 가설 검증 결과: {'채택 (대중 여론이 공식 보도에 통계적으로 선행함)' if is_preceding else '기각'}")
 
-    # 5. 논문 삽입용 CCF 분석 결과 시각화 그래프 저장
+    # 논문 삽입용 CCF 분석 결과 시각화 그래프 저장
     plt.figure(figsize=(8, 4))
     plt.stem(range(len(lag_subset)), lag_subset, linefmt='b-', markerfmt='bo', basefmt='r-')
     plt.title(f'Lagged Cross-Correlation (CCF) - Hub: "{hub}"', fontsize=12, fontweight='bold')
@@ -108,17 +99,13 @@ for hub in common_hubs:
     plt.close()
     print(f"     -> 시각화 그래프 저장 완료: '{plot_name}'")
 
-# 6. 최종 가설 검증 요약 리포트 저장
-if validation_results:
+if validation_results:# 최종 가설 검증 요약 리포트 저장
     result_df = pd.DataFrame(validation_results)
     output_filename = "hypothesis_H1_final_validation_result.csv"
     result_df.to_csv(output_filename, index=False, encoding='utf-8-sig')
     
-    print("\n" + "="*70)
     print(" 🏆 [Stage 6 완료] 연구 가설(H1) 최종 검증 요약 리포트")
-    print("="*70)
     print(result_df.to_string(index=False))
     print(f"\n  -> 전체 검증 결과가 '{output_filename}' 파일로 안전하게 저장되었습니다.")
-    print("="*70)
 else:
     print("\n  [-] 검증을 완료한 공통 허브 키워드가 없습니다.")
