@@ -1,184 +1,72 @@
+# Stage 5: SNA 및 뇌관 추출 모듈 (Optimized Version)
 import pandas as pd
+import ast
 import numpy as np
 import networkx as nx
-import matplotlib.pyplot as plt
-import seaborn as sns
-import ast
 from sklearn.feature_extraction.text import CountVectorizer
 import warnings
 warnings.filterwarnings('ignore')
 
-# 그래프 폰트 및 시각화 환경 세팅 (한글 깨짐 방지)
-plt.rcParams['font.family'] = 'Malgun Gothic'  # 💡 맥(Mac) 유저는 'AppleGothic'으로 변경
-plt.rcParams['axes.unicode_minus'] = False 
+print("[뉴스 기사/댓글] Stage 5: 최적화된 네트워크 분석(SNA) 및 핵심 뇌관 식별 가동!")
+try: # 1. 전처리 데이터 로드 (뉴스 및 댓글 통합 또는 개별 처리)
+    news_df = pd.read_csv("news_preprocessed.csv")
+    print(f"  - 뉴스 데이터를 성공적으로 불러왔습니다. (총 {len(news_df)}건)")
+except FileNotFoundError:
+    print("  - [오류] 'news_preprocessed.csv' 파일을 찾을 수 없습니다. 2단계를 먼저 실행해주세요.")
+    exit()
 
-def visualize_and_generate_report(clean_filename, matrix_filename, trend_filename, data_type, prefix):
-    print(f"\n{'='*70}")
-    print(f"[*] [{data_type}] Stage 5: 네트워크 분석(SNA) 및 핵심 뇌관 식별 가동!")
-    print(f"{'='*70}")
-    
-    # ---------------------------------------------------------
-    # 1. 데이터 불러오기 및 텍스트 복원
-    # ---------------------------------------------------------
+def parse_tokens(x): # 문자열 리스트 변환 함수
     try:
-        df_clean = pd.read_csv(clean_filename)
-        signal_df = pd.read_csv(matrix_filename)
-        
-        # Stage 2에서 저장된 'tokens' 문자열 리스트를 복원
-        df_clean['tokens'] = df_clean['tokens'].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
-        df_clean['final_text'] = df_clean['tokens'].apply(lambda x: ' '.join(x))
-        
-        vocab = signal_df['Keyword'].tolist() # 4단계에서 확정된 공통 단어장
-        print(f"  - 데이터를 성공적으로 불러왔습니다. (대상 단어: {len(vocab)}개)")
-    except FileNotFoundError:
-        print(f"  [-] '{data_type}'의 필요 파일이 없습니다. Stage 2와 Stage 4를 확인해주세요.")
-        return
+        return ast.literal_eval(x)
+    except:
+        return []
 
-    # ---------------------------------------------------------
-    # 2. 시계열 토픽 트렌드 시각화 (Stacked Bar Chart)
-    # ---------------------------------------------------------
-    try:
-        trend_df = pd.read_csv(trend_filename, index_col=0)
-        print(f"[*] [{data_type}] 시계열 토픽 비중 변화 그래프 생성 중...")
-        plt.figure(figsize=(10, 6))
-        trend_df.plot(kind='bar', stacked=True, colormap='Set2', ax=plt.gca(), alpha=0.85)
-        plt.title(f'[{data_type}] 시계열 구간별 위기 담론 토픽 비중 변화', fontsize=15, fontweight='bold', pad=15)
-        plt.xlabel('시계열 구간', fontsize=12)
-        plt.ylabel('토픽 비중 (%)', fontsize=12)
-        plt.legend(title='Dominant Topics', bbox_to_anchor=(1.05, 1), loc='upper left') 
-        plt.xticks(rotation=0)
-        plt.grid(axis='y', linestyle=':', alpha=0.6)
-        plt.tight_layout()
-        plot1_name = f"{prefix}_Topic_Trend_Plot.png"
-        plt.savefig(plot1_name, dpi=300)
-        plt.close()
-        print(f"  -> '{plot1_name}' 저장 완료!")
-    except FileNotFoundError:
-        print(f"  [-] '{trend_filename}'이 없어 토픽 트렌드 시각화는 생략합니다. (SNA 분석으로 넘어갑니다)")
+news_df['tokens'] = news_df['tokens'].apply(parse_tokens)
+news_df = news_df[news_df['tokens'].map(len) > 0] # [] 삭제
 
-    # ---------------------------------------------------------
-    # 3. 의미 연결망 분석 (SNA) 및 중심성 지표 산출
-    # ---------------------------------------------------------
-    print(f"[*] [{data_type}] 단어 간 동시출현 행렬 구축 및 중심성 분석 중...")
-    
-    vectorizer = CountVectorizer(vocabulary=vocab, binary=True)
-    dtm = vectorizer.fit_transform(df_clean['final_text'].fillna(""))
+# 2. 핵심 노드 수 제한을 위한 상위 빈도 단어 필터링 (속도 최적화 핵심)
+MAX_FEATURES = 300  # 연산 폭증 방지를 위해 상위 300개 키워드로 제한
+print(f" 상위 빈도 기준 상위 {MAX_FEATURES}개의 키워드로 네트워크 노드를 제한합니다.")
 
-    co_occurrence_matrix = np.dot(dtm.T.toarray(), dtm.toarray())
-    np.fill_diagonal(co_occurrence_matrix, 0) # 자기 자신 연결 제거
+docs = news_df['tokens'].apply(lambda x: ' '.join(x)) #def는 정규직 lambda는 일용직
+vectorizer = CountVectorizer(max_features=MAX_FEATURES, min_df=2)
+X = vectorizer.fit_transform(docs)
+feature_names = vectorizer.get_feature_names_out() #이름표 뽑아내기, 네트워크 그래프를 그릴 때 각각의 '노드(점)' 이름으로 그대로 사용
 
-    G = nx.from_numpy_array(co_occurrence_matrix)
-    mapping = {i: word for i, word in enumerate(vocab)}
-    G = nx.relabel_nodes(G, mapping) 
+print("동시출현 행렬(Co-occurrence Matrix) 구축 중...") # 3. 동시출현 행렬(Co-occurrence Matrix) 구축
+co_occurrence_matrix = (X.T * X).toarray() #X.T는 뒤집기, + *X (행렬 곱셈): 옆으로 눕힌 표(X.T)와 원래 표(X)를 곱해버림, 이후 array로 만듦(일반 표로 변신)
+np.fill_diagonal(co_occurrence_matrix, 0) # 자기 자신과의 동시출현 제외
 
-    deg_centrality = nx.degree_centrality(G)     
-    bet_centrality = nx.betweenness_centrality(G) 
+print("NetworkX 그래프 생성 및 중심성(연결정도·매개) 연산 중...") # 4. NetworkX 그래프 생성 및 중심성 분석
+G = nx.Graph() # networkx 네트워크 전문 화가(라이브러리)의 '새 도화지' 준비하기 
 
-    signal_df['Degree_Centrality'] = signal_df['Keyword'].map(deg_centrality).fillna(0)
-    signal_df['Betweenness_Centrality'] = signal_df['Keyword'].map(bet_centrality).fillna(0)
+n_features = len(feature_names) # 노드 및 엣지 추가 (등장인물(점) 몇 명인지 세기)
+for i in range(n_features): #1번 손님(i=0)은 2번부터 300번 손님(j=1~299)과 쭉 악수
+    for j in range(i + 1, n_features): #2번 손님(i=1)은 1번 손님과 다시 악수할 필요가 없고 3번부터 300번 손님(j=2~299)까지만 악수
+        weight = co_occurrence_matrix[i, j] #두 단어(i번 단어와 j번 단어)가 몇 번이나 같이 등장했는지 그 점수를 가져와 weight(가중치)라고 부름
+        if weight > 0: #만약 두 단어가 단 한 번이라도 같이 등장한 적이 있다면
+            G.add_edge(feature_names[i], feature_names[j], weight=weight) #도화지(G)에 두 단어 이름(i와 j)으로 점을 찍고, 두 점 사이에 선(edge)을 그어줘! 그리고 그 선 위에 친밀도 점수(weight)도 숫자표로 달아놔
 
-    # ---------------------------------------------------------
-    # 4. 진성 약신호 SNA 산점도 시각화
-    # ---------------------------------------------------------
-    print(f"[*] [{data_type}] 진성 약신호(Weak Signals) 중심성 산점도 생성 중...")
+G.remove_nodes_from(list(nx.isolates(G))) # 고립된 노드 제거 (다른 단어와 한번도 같이 등장한 적이 없어서 연결선이 아예 없는)
 
-    weak_signals = signal_df[
-        (signal_df['Is_Valid_Evolution'] == True) & 
-        (signal_df['Latest_KEM_Quadrant'] == 2) &
-        (signal_df['Latest_KIM_Quadrant'] == 2)
-    ].copy()
+if len(G.nodes) > 0: #안전 점검 (빈 도화지 방지)
+    degree_centrality = nx.degree_centrality(G) #연결중심성 지표 계산(마당발 인싸 지수)
+    betweenness_centrality = nx.betweenness_centrality(G, weight='weight') #매개중심성 지표 계산(환승역 지수)
 
-    if not weak_signals.empty:
-        plt.figure(figsize=(10, 8))
-        sns.scatterplot(
-            data=weak_signals, 
-            x='Degree_Centrality', 
-            y='Betweenness_Centrality', 
-            color='crimson', 
-            s=120, alpha=0.7, edgecolor='black'
-        )
-
-        mean_deg = weak_signals['Degree_Centrality'].mean()
-        mean_bet = weak_signals['Betweenness_Centrality'].mean()
-        plt.axvline(mean_deg, color='gray', linestyle='--', linewidth=1) 
-        plt.axhline(mean_bet, color='gray', linestyle='--', linewidth=1) 
-
-        plt.title(f'[{data_type}] 진성 약신호 중심성 지도 (SNA)', fontsize=15, fontweight='bold', pad=15)
-        plt.xlabel('연결정도 중심성 (파급력)', fontsize=12)
-        plt.ylabel('매개 중심성 (허브 역할)', fontsize=12)
-        plt.grid(True, linestyle=':', alpha=0.6)
-
-        # 상위 핵심 단어 레이블링
-        top_hubs = weak_signals.sort_values(by='Betweenness_Centrality', ascending=False).head(10)
-        for _, row in top_hubs.iterrows():
-            plt.text(row['Degree_Centrality'], row['Betweenness_Centrality'] + 0.0005, 
-                     row['Keyword'], fontsize=10, fontweight='bold', color='darkred', ha='center')
-
-        plt.tight_layout()
-        plot2_name = f"{prefix}_SNA_Centrality_Plot.png"
-        plt.savefig(plot2_name, dpi=300)
-        plt.close()
-        print(f"  -> '{plot2_name}' 저장 완료!")
-
-        # ---------------------------------------------------------
-        # 5. 최종 융합 리포트 생성
-        # ---------------------------------------------------------
-        final_report = weak_signals.sort_values(by=['Betweenness_Centrality', 'TF_Latest'], ascending=[False, False])
-        report_name = f"{prefix}_final_weak_signals_report.csv"
-        final_report.to_csv(report_name, index=False, encoding='utf-8-sig')
-        print(f"[*] [{data_type}] 최종 약신호 리포트가 '{report_name}'에 저장되었습니다.")
-        
-        # ---------------------------------------------------------
-        # 6. 타겟 약신호(Hub) 월별 트렌드 추출 (Stage 6 시차교차상관 분석용)
-        # ---------------------------------------------------------
-        # 단일 키워드가 아닌 상위 3개의 Hub를 모두 추출하여 6단계에서 교차 검증할 수 있도록 개선
-        top_3_hubs = final_report.head(3)['Keyword'].tolist()
-        print(f"[*] [{data_type}] 핵심 매개 뇌관 Top 3 {top_3_hubs} 월별 트렌드 추출 중...")
-
-        df_clean['date'] = pd.to_datetime(df_clean['date'])
-        df_clean['year_month'] = df_clean['date'].dt.to_period('M') 
-        
-        trend_output = f"{prefix}_hub_monthly_trends.csv"
-        hub_trend_df = pd.DataFrame()
-        
-        for hub in top_3_hubs:
-            df_clean['contains_keyword'] = df_clean['final_text'].apply(lambda x: hub in x)
-            monthly_trend = df_clean.groupby('year_month')['contains_keyword'].sum().reset_index()
-            monthly_trend.columns = ['date', f'{hub}_score']
-            monthly_trend['date'] = monthly_trend['date'].astype(str)
-            
-            if hub_trend_df.empty:
-                hub_trend_df = monthly_trend
-            else:
-                hub_trend_df = pd.merge(hub_trend_df, monthly_trend, on='date', how='outer')
-                
-        hub_trend_df = hub_trend_df.sort_values(by='date').reset_index(drop=True)
-        hub_trend_df.to_csv(trend_output, index=False, encoding='utf-8-sig')
-        print(f"  -> 월별 트렌드 집계 완료! '{trend_output}' 저장 완료.")
-
-    else:
-        print(f"  [-] [{data_type}] 시각화 및 리포트를 생성할 진성 약신호가 존재하지 않습니다.")
-
-# =========================================================
-# 실행부
-# =========================================================
-if __name__ == "__main__":
-    # 1) 뉴스 기사 (공식 담론)
-    visualize_and_generate_report(
-        clean_filename="news_preprocessed.csv",
-        matrix_filename="news_kem_kim_matrix.csv",
-        trend_filename="news_topic_trend.csv",
-        data_type="뉴스 기사(공식 담론)",
-        prefix="news"
+    centrality_df = pd.DataFrame({ # 결과 데이터프레임 정리
+        'Keyword': list(G.nodes),
+        'Degree_Centrality': [degree_centrality[node] for node in G.nodes], #노드를 불러와서 연결중심성 점수만 쏙 읽어와
+        'Betweenness_Centrality': [betweenness_centrality[node] for node in G.nodes] #노드를 불러와서 매개중심성 점수만 쏙 읽어와
+    })
+    centrality_df['Hub_Score'] = (    # 복합 영향력 지표 산출 (연결정도 + 매개중심성 가중 합산)
+        centrality_df['Degree_Centrality'] * 0.5 + centrality_df['Betweenness_Centrality'] * 0.5
     )
+    centrality_df = centrality_df.sort_values(by='Hub_Score', ascending=False).reset_index(drop=True) # 핵심 뇌관 키워드 순위 정렬
 
-    # 2) 뉴스 댓글 (대중 여론)
-    visualize_and_generate_report(
-        clean_filename="comments_preprocessed.csv",
-        matrix_filename="comments_kem_kim_matrix.csv",
-        trend_filename="comments_topic_trend.csv",
-        data_type="뉴스 댓글(대중 여론)",
-        prefix="comments"
-    )
-    
-    print("\n[🎉 Stage 5 완료] 다차원 시각화 및 리포트 도출이 완료되었습니다!")
+    centrality_df.to_csv("hub_monthly_trends.csv", index=False, encoding='utf-8-sig') # 체크포인트 저장
+    print(f"[✅ 완료] 상위 {len(centrality_df)}개 핵심 노드 분석 완료")
+    print("상위 5대 핵심 뇌관 키워드:")
+    print(centrality_df.head(5)[['Keyword', 'Hub_Score']])
+    print("결과 파일 저장 완료: 'hub_monthly_trends.csv'")
+else:
+    print("경고: 네트워크를 구성할 충분한 동시출현 관계가 발견되지 않았습니다.")
