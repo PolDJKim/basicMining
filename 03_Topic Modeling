@@ -1,22 +1,23 @@
-# ==========================================
-# Stage 3: 잠재 디리클레 할당(LDA) 토픽 모델링 (Topic Modeling)
-# ==========================================
+# Stage 3] 잠재 디리클레 할당(LDA) 토픽 모델링 (Topic Modeling)
 import pandas as pd
-import ast
-import matplotlib.pyplot as plt
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.decomposition import LatentDirichletAllocation
+import ast #글자(문자열)로 저장된 파이썬 코드를 실제 파이썬 코드로 안전하게 바꿔주는 도구
+import platform #지금 이 코드가 실행되고 있는 컴퓨터가 윈도우인지, 맥인지, 리눅스인지 확인해 주는 도구
+import matplotlib.pyplot as plt #데이터시각화
+from sklearn.feature_extraction.text import CountVectorizer #머신러닝 도구 상자인 '사이킷런(sklearn)'에서 글자를 숫자로(단어 등장 횟수) 세어주는 도구
+from sklearn.decomposition import LatentDirichletAllocation #사이킷런에서 LDA 토픽 모델링을 해주는 핵심 기계학습 알고리즘
 import warnings
 warnings.filterwarnings('ignore')
 
-# 한글 폰트 설정 (시각화용, 윈도우 기준 맑은 고딕)
-plt.rcParams['font.family'] = 'Malgun Gothic'
+if platform.system() == 'Windows': # [크로스플랫폼 한글 폰트 설정] OS에 따라 자동 적용 (Mac, Windows 대응)
+    plt.rcParams['font.family'] = 'Malgun Gothic'
+elif platform.system() == 'Darwin': # Mac OS
+    plt.rcParams['font.family'] = 'AppleGothic'
+
 plt.rcParams['axes.unicode_minus'] = False
 
 print("\n[Stage 3] LDA 토픽 모델링 및 최적 토픽 수(K) 탐색을 시작합니다.")
 
-# 1. 2단계 전처리 데이터 로드
-try:
+try: # 1. 2단계 전처리 데이터 로드
     news_df = pd.read_csv("news_preprocessed.csv")
     comments_df = pd.read_csv("comments_preprocessed.csv")
     print("  - 전처리된 데이터를 성공적으로 불러왔습니다.")
@@ -27,24 +28,23 @@ except FileNotFoundError:
 # 2. 문자열로 저장된 리스트를 실제 파이썬 리스트로 변환 (ast.literal_eval 활용)
 def parse_tokens(x):
     try:
-        return ast.literal_eval(x)
+        return ast.literal_eval(x) #리스트 모양을 한 '문자열'을 진짜 '리스트'로 변환
     except:
-        return []
+        return [] #만약 데이터가 비어있거나 이상해서 에러가 나면, 빈 리스트([])를 반환
 
-news_df['tokens'] = news_df['tokens'].apply(parse_tokens)
+news_df['tokens'] = news_df['tokens'].apply(parse_tokens) #데이터 표의 tokens 열에 있는 수만 개의 모든 줄에 이 함수를 일괄 적용
 comments_df['tokens'] = comments_df['tokens'].apply(parse_tokens)
 
 # 빈 토큰 행 2차 필터링
-news_df = news_df[news_df['tokens'].map(len) > 0]
+news_df = news_df[news_df['tokens'].map(len) > 0] #단어가 1개 이상 있는 데이터만 남기고, 속이 빈 데이터는 표에서 통째로 버림
 comments_df = comments_df[comments_df['tokens'].map(len) > 0]
 
 # 3. 문서 단어 행렬(DTM) 생성 함수
-def create_dtm(df, text_col='tokens'):
+def create_dtm(df, text_col='tokens'): #어떤 단어가 몇 번 쓰였는가?"를 나타내는 거대한 숫자 표 Document-Term Matrix
     docs = df[text_col].apply(lambda x: ' '.join(x))
-    # 문서 빈도가 너무 높거나(90% 이상) 너무 낮은(2번 이하) 단어 제외
-    vectorizer = CountVectorizer(max_df=0.9, min_df=2)
+    vectorizer = CountVectorizer(max_df=0.9, min_df=2) # 문서 빈도가 너무 높거나(90% 이상) 너무 낮은(2번 이하) 단어 제외
     dtm = vectorizer.fit_transform(docs)
-    return dtm, vectorizer
+    return dtm, vectorizer #숫자 표(dtm)와, 단어 사전을 기억하고 있는 기계(vectorizer) 두 개를 결과물로 반환
 
 print("  - 문서-단어 행렬(DTM) 생성 중...")
 news_dtm, news_vec = create_dtm(news_df)
@@ -52,21 +52,21 @@ comments_dtm, comments_vec = create_dtm(comments_df)
 
 
 # 4. 최적의 토픽 수(K) 탐색 함수 (Perplexity, Log-Likelihood 기반)
-def find_optimal_k(dtm, data_name, min_k=2, max_k=10):
+def find_optimal_k(dtm, data_name, min_k=2, max_k=10): #주제를 최소 2개부터 최대 10개까지 나눠보면서 테스트
     print(f"\n  [{data_name}] 최적의 토픽 수(K) 탐색 (K={min_k}~{max_k})")
-    search_k = range(min_k, max_k + 1)
+    search_k = range(min_k, max_k + 1) #[2, 3, 4, 5, 6, 7, 8, 9, 10]
     log_likelihoods = []
     perplexities = []
     
     for k in search_k:
-        lda = LatentDirichletAllocation(n_components=k, random_state=42)
-        lda.fit(dtm)
-        score = lda.score(dtm)
-        perp = lda.perplexity(dtm)
+        lda = LatentDirichletAllocation(n_components=k, random_state=42) #LDA 모델
+        lda.fit(dtm) #모델에게 숫자 표(DTM)를 주고 학습
+        score = lda.score(dtm) 
+        perp = lda.perplexity(dtm) 
         
-        log_likelihoods.append(score)
-        perplexities.append(perp)
-        print(f"    - K={k}: Log-Likelihood={score:.2f}, Perplexity={perp:.2f}")
+        log_likelihoods.append(score) #Log-Likelihood 값을 계산. 높을수록 모델이 데이터를 잘 설명
+        perplexities.append(perp) #Perplexity(혼란도) 값을 계산합니다. (모델이 얼마나 헷갈려하는지 나타내는 지표로, 낮을수록 좋음
+        print(f" - K={k}: Log-Likelihood={score:.2f}, Perplexity={perp:.2f}")
     
     # 평가 지표 시각화 (논문 삽입용 그래프)
     fig, ax1 = plt.subplots(figsize=(8, 5))
@@ -109,7 +109,6 @@ def run_final_lda(dtm, vectorizer, optimal_k, data_name, n_top_words=10):
     return lda
 
 # !!! 연구자가 위 탐색 결과를 바탕으로 직접 결정한 최적 K값을 아래에 입력합니다 !!!
-# (초기값으로 양측 모두 5를 설정해 두었습니다. 실행 후 그래프를 보고 수정할 수 있습니다.)
 OPTIMAL_K_NEWS = 5 
 OPTIMAL_K_COMMENTS = 5 
 
