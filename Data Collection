@@ -1,0 +1,226 @@
+#  조현병 담론 이원적 수집 파이프라인
+#         기사 본문(공식 담론) + 댓글(여론)을 함께 수집
+
+import requests                                   # HTTP 요청 (기사 본문, 댓글 API 호출용)
+import json                                       # JSONP 응답을 파이썬 딕셔너리로 변환
+import re                                         # 정규표현식 (URL에서 기사 ID 추출)
+import time                                       # 요청 사이 대기 (차단 방지)
+import pandas as pd                               # 표 형태 데이터 처리
+from datetime import datetime                     # 수집 기간을 월 단위로 쪼갤 때 사용
+from dateutil.relativedelta import relativedelta  # 월 단위 증감 (pip install python-dateutil)
+from bs4 import BeautifulSoup                     # HTML 파싱
+from selenium import webdriver                    # 검색 결과 페이지는 JS 렌더링이라 셀레니움 필요
+from selenium.webdriver.chrome.options import Options
+
+# 설정
+SEARCH_KEYWORDS = ["조현병", "조현증", "정신분열병", "정신분열증"]  # 질환명만. 범죄 어휘를 넣으면 순환 논리가 됨
+START_DATE = "2008.01.01"                         # 병명 개정(2011) 이전 구간을 포함해야 개정 효과를 볼 수 있음
+END_DATE   = "2025.12.31"
+PAGES_PER_MONTH = 5                               # 월 1구간당 검색 결과 페이지 수 (1페이지 = 기사 10건)
+
+def split_period_by_month(start_date, end_date): # 함수 1) 수집 기간을 월 단위로 잘라주는 함수, 네이버 검색은 한 쿼리로 볼 수 있는 결과 수가 제한되어 있어서 18년치를 한 번에 요청하면 앞부분 몇 백 건만 나오고 끝남
+    cursor = datetime.strptime(start_date, "%Y.%m.%d")     # 문자열을 날짜 객체로 변환
+    last   = datetime.strptime(end_date,   "%Y.%m.%d")
+    ranges = []                                            # (구간시작, 구간끝) 튜플을 담을 리스트
+
+    while cursor <= last:
+        nxt = cursor + relativedelta(months=1)             # 한 달 뒤로 이동
+        seg_end = min(nxt - relativedelta(days=1), last)   # 구간 끝은 다음 달 1일의 하루 전
+        ranges.append((cursor.strftime("%Y.%m.%d"),
+                       seg_end.strftime("%Y.%m.%d")))
+        cursor = nxt                                       # 커서를 다음 달로 옮김
+
+    return ranges
+
+def collect_news_urls(driver, query, start_date, end_date, max_pages): # 함수 2) 검색 결과에서 네이버 뉴스 기사 링크만 수집
+    collected = []                                         # 이 구간에서 모은 링크
+
+    for page in range(1, max_pages + 1):
+        start_val = (page - 1) * 10 + 1                    # 네이버 페이지네이션은 1, 11, 21... 방식
+        url = (f"https://search.naver.com/search.naver?where=news&query={query}"
+               f"&sort=1&pd=3&ds={start_date}&de={end_date}&start={start_val}")
+        # sort=1은 최신순, pd=3은 기간 직접 지정 모드
+        driver.get(url)
+        time.sleep(1.5)                                    # 렌더링 대기
+
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        for a in soup.find_all("a"):                       # 페이지 안의 모든 링크 순회
+            href = a.get("href", "")
+            if "n.news.naver.com" in href and "article" in href:
+                collected.append(href.split("?")[0])       # 쿼리스트링 제거해서 URL 형태 통일
+
+    return list(set(collected))                            # set으로 중복 제거
+      
+def extract_ids(news_url): # 함수 3) URL에서 언론사 ID(oid)와 기사 ID(aid)를 뽑는 함수, 기사와 댓글을 연결하는 열쇠이므로 따로 분리해둠
+    m = re.search(r"article/(\d+)/(\d+)", news_url)        # 예: article/025/0003254631
+    if not m:
+        return None, None
+    return m.group(1), m.group(2)                          # (oid, aid)
+
+
+
+def get_article_content(news_url, session): # 함수 4) 기사 본문 수집 셀레니움 없이 requests로 충분함 (본문은 정적 HTML)
+    oid, aid = extract_ids(news_url)
+    if oid is None:
+        return None
+
+    try:
+        res = session.get(news_url, timeout=7)
+        soup = BeautifulSoup(res.text, "html.parser")
+    except Exception:
+        return None                                        # 실패한 기사는 건너뜀
+
+    # 본문 영역은 레이아웃에 따라 id가 다름. 순서대로 시도.
+    body_tag = (soup.select_one("#dic_area")               # 일반 뉴스
+                or soup.select_one("#articeBody")          # 연예 뉴스
+                or soup.select_one("#newsEndContents"))    # 스포츠 뉴스
+    if body_tag is None:
+        return None
+
+    for tag in body_tag.select("script, style, span.end_photo_org"):
+        tag.decompose()                                    # 스크립트와 사진 캡션 제거
+
+    body = body_tag.get_text(separator=" ", strip=True)
+    body = re.sub(r"\s+", " ", body)                       # 연속 공백을 하나로 정리
+
+    title_tag = (soup.select_one("#title_area")
+                 or soup.select_one("h2.media_end_head_headline"))
+    title = title_tag.get_text(strip=True) if title_tag else ""
+
+    press_tag = soup.select_one(".media_end_head_top_logo img")
+    press = press_tag.get("alt", "") if press_tag else ""   # 언론사명 (전재 중복 확인에 사용)
+
+    date_tag = soup.select_one(".media_end_head_info_datestamp_time")
+    pub_date = date_tag.get("data-date-time", "") if date_tag else ""
+
+    return {
+        "oid": oid,                                        # 언론사 ID
+        "aid": aid,                                        # 기사 ID
+        "url": news_url,
+        "press": press,
+        "pub_date": pub_date,
+        "title": title,
+        "body": body,
+    }
+
+def get_comments(news_url, session): # 함수 5) 댓글 수집
+    oid, aid = extract_ids(news_url)
+    if oid is None:
+        return []
+
+    object_id = f"news{oid},{aid}"                         # 댓글 API가 요구하는 식별자 형식
+    api_url = "https://apis.naver.com/commentBox/cbox/web_naver_list_jsonp.json"
+
+    try:
+        session.get(news_url, timeout=5)                   # 기사 페이지를 먼저 열어 쿠키 확보
+    except Exception:
+        pass
+
+    headers = {"Referer": news_url}                        # 기사에서 넘어온 것처럼 보이게 함
+    results, page, seen = [], 1, set()
+
+    while True:
+        params = {
+            "ticket": "news", "templateId": "default_society", "pool": "cbox5",
+            "lang": "ko", "country": "KR", "objectId": object_id,
+            "pageSize": 100, "page": page, "sort": "NEW", "cleanbot": "false",
+        }
+        try:
+            res = session.get(api_url, headers=headers, params=params, timeout=7)
+            json_text = re.sub(r"^[^(]*\((.*)\)[^)]*$", r"\1", res.text)  # JSONP 껍데기 벗기기
+            data = json.loads(json_text)
+        except Exception:
+            break                                          # 파싱 실패하면 이 기사 댓글은 포기
+
+        comment_list = data.get("result", {}).get("commentList", [])
+        if not comment_list:
+            break                                          # 더 이상 댓글이 없으면 종료
+
+        new_count = 0
+        for c in comment_list:
+            if c["commentNo"] in seen:                     # 같은 댓글이 다시 오면 건너뜀
+                continue
+            seen.add(c["commentNo"])
+            new_count += 1
+            if c["deleted"]:                               # 삭제된 댓글은 저장하지 않음
+                continue
+
+            results.append({
+                "comment_no": c["commentNo"],
+                "oid": oid, "aid": aid,                    # 원기사와 연결하는 열쇠
+                "origin_url": news_url,
+                "date": c["regTime"],
+                "text": c["contents"],
+                "sympathy": c["sympathyCount"],
+                "antipathy": c["antipathyCount"],
+            })
+
+        if new_count == 0:                                 # 새 댓글이 하나도 없으면 마지막 페이지
+            break
+        page += 1
+        time.sleep(0.3)
+
+    return results
+
+# ----- ----- ----- 실행부 ----- ----- -----
+options = Options()
+options.add_argument("disable-blink-features=AutomationControlled")   # 자동화 탐지 흔적 숨김
+options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+driver = webdriver.Chrome(options=options)
+
+session = requests.Session()                               # 쿠키를 유지하는 세션 하나만 만들어 재사용
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+})
+
+articles, comments = [], []                                # 두 담론을 각각 담을 리스트
+periods = split_period_by_month(START_DATE, END_DATE)      # 월 단위 구간 목록
+seen_articles = set()                                      # (oid, aid) 중복 방지용
+
+for keyword in SEARCH_KEYWORDS:
+    for seg_start, seg_end in periods:
+        urls = collect_news_urls(driver, keyword, seg_start, seg_end, PAGES_PER_MONTH)
+        print(f"[{keyword}] {seg_start}~{seg_end} : 링크 {len(urls)}건")
+
+        for url in urls:
+            oid, aid = extract_ids(url)
+            if (oid, aid) in seen_articles:                # 다른 키워드로 이미 잡힌 기사면 건너뜀
+                continue
+            seen_articles.add((oid, aid))
+
+            art = get_article_content(url, session)        # 기사 본문
+            if art is None:
+                continue
+            art["search_keyword"] = keyword                # 어느 검색어로 걸렸는지 꼬리표
+            articles.append(art)
+
+            cmts = get_comments(url, session)              # 같은 기사의 댓글
+            for c in cmts:
+                c["search_keyword"] = keyword
+            comments.extend(cmts)
+
+            time.sleep(0.4)                                # 기사 사이 대기
+
+driver.quit()                                              # 브라우저 종료 (좀비 프로세스 방지)
+
+# 정제 및 저장
+df_articles = pd.DataFrame(articles)
+df_comments = pd.DataFrame(comments)
+
+if not df_articles.empty:
+    # 전재 중복 제거: 제목이 같고 본문 앞 100자가 같으면 같은 원고로 간주
+    df_articles["dup_key"] = (df_articles["title"].str.replace(r"\s+", "", regex=True)
+                              + "_" + df_articles["body"].str[:100])
+    df_articles = df_articles.drop_duplicates(subset=["dup_key"], keep="first")
+    df_articles = df_articles.drop(columns=["dup_key"])
+    df_articles.to_csv("articles_raw.csv", index=False, encoding="utf-8-sig")
+    print(f"기사 {len(df_articles)}건 저장 완료")
+
+if not df_comments.empty:
+    df_comments = df_comments.drop_duplicates(subset=["comment_no"], keep="first")
+    df_comments["date"] = pd.to_datetime(df_comments["date"], errors="coerce")
+    df_comments = df_comments.sort_values("date").reset_index(drop=True)
+    df_comments.to_csv("comments_raw.csv", index=False, encoding="utf-8-sig")
+    print(f"댓글 {len(df_comments)}건 저장 완료")
